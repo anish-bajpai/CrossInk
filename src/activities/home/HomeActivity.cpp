@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "../reader/BookReadingStats.h"
+#include "../demo/SentenceUnderlineActivity.h"
 #include "../reader/BookStatsActivity.h"
 #include "BookmarkStore.h"
 #include "BookmarksHomeActivity.h"
@@ -25,7 +26,7 @@
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // File Browser, Recents, File transfer, Settings
+  int count = 5;  // File Browser, Recents, Sentence demo, File transfer, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -217,6 +218,7 @@ void HomeActivity::loop() {
     const int opdsLibraryIdx = hasOpdsUrl ? idx++ : -1;
     const int readingStatsIdx = hasReadingStats ? idx++ : -1;
     const int bookmarksIdx = hasBookmarks ? idx++ : -1;
+    const int sentenceDemoIdx = idx++;
     const int fileTransferIdx = idx++;
     const int settingsIdx = idx;
 
@@ -232,6 +234,8 @@ void HomeActivity::loop() {
       onReadingStatsOpen();
     } else if (menuSelectedIndex == bookmarksIdx) {
       onBookmarksOpen();
+    } else if (menuSelectedIndex == sentenceDemoIdx) {
+      onSentenceDemoOpen();
     } else if (menuSelectedIndex == fileTransferIdx) {
       onFileTransferOpen();
     } else if (menuSelectedIndex == settingsIdx) {
@@ -256,9 +260,9 @@ void HomeActivity::render(RenderLock&&) {
                           currentBookStats.sessionCount > 0 ? &currentBookStats : nullptr);
 
   // Build menu items dynamically
-  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
+  std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_SENTENCE_DEMO_MENU),
+                                        tr(STR_FILE_TRANSFER), tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Recent, Text, Transfer, Settings};
 
   if (hasOpdsUrl) {
     // Insert OPDS Browser after File Browser
@@ -328,5 +332,10 @@ void HomeActivity::onReadingStatsOpen() {
 
 void HomeActivity::onBookmarksOpen() {
   startActivityForResult(std::make_unique<BookmarksHomeActivity>(renderer, mappedInput),
+                         [this](const ActivityResult&) { requestUpdate(); });
+}
+
+void HomeActivity::onSentenceDemoOpen() {
+  startActivityForResult(std::make_unique<SentenceUnderlineActivity>(renderer, mappedInput),
                          [this](const ActivityResult&) { requestUpdate(); });
 }

@@ -1,5 +1,7 @@
 #include "TxtReaderActivity.h"
 
+#include <algorithm>
+
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -19,8 +21,12 @@ namespace {
 constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
-constexpr uint8_t CACHE_VERSION = 2;          // Increment when cache format changes
+constexpr uint8_t CACHE_VERSION = 3;          // Increment when cache format changes
 }  // namespace
+
+TxtReaderActivity::TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt,
+                                     const std::string& activityName)
+    : Activity(activityName, renderer, mappedInput), txt(std::move(txt)) {}
 
 void TxtReaderActivity::onEnter() {
   Activity::onEnter();
@@ -57,6 +63,7 @@ void TxtReaderActivity::onExit() {
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   pageOffsets.clear();
+  pageStartSourceLine.clear();
   currentPageLines.clear();
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
@@ -139,9 +146,12 @@ void TxtReaderActivity::initializeReader() {
 
 void TxtReaderActivity::buildPageIndex() {
   pageOffsets.clear();
+  pageStartSourceLine.clear();
   pageOffsets.push_back(0);  // First page starts at offset 0
+  pageStartSourceLine.push_back(0);
 
   size_t offset = 0;
+  uint32_t linesBeforeOffset = 0;
   const size_t fileSize = txt->getFileSize();
 
   LOG_DBG("TRS", "Building page index for %zu bytes...", fileSize);
@@ -151,8 +161,9 @@ void TxtReaderActivity::buildPageIndex() {
   while (offset < fileSize) {
     std::vector<std::string> tempLines;
     size_t nextOffset = offset;
+    uint32_t linesBeforeNext = linesBeforeOffset;
 
-    if (!loadPageAtOffset(offset, tempLines, nextOffset)) {
+    if (!loadPageAtOffset(offset, tempLines, nextOffset, &linesBeforeOffset, &linesBeforeNext, nullptr)) {
       break;
     }
 
@@ -164,7 +175,9 @@ void TxtReaderActivity::buildPageIndex() {
     offset = nextOffset;
     if (offset < fileSize) {
       pageOffsets.push_back(offset);
+      pageStartSourceLine.push_back(linesBeforeNext);
     }
+    linesBeforeOffset = linesBeforeNext;
 
     // Yield to other tasks periodically
     if (pageOffsets.size() % 20 == 0) {
@@ -176,8 +189,13 @@ void TxtReaderActivity::buildPageIndex() {
   LOG_DBG("TRS", "Built page index: %d pages", totalPages);
 }
 
-bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset) {
+bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset,
+                                         const uint32_t* inLinesBeforeOffset, uint32_t* outLinesBeforeNextOffset,
+                                         std::vector<uint16_t>* outLineSentenceIndex) {
   outLines.clear();
+  if (outLineSentenceIndex) {
+    outLineSentenceIndex->clear();
+  }
   const size_t fileSize = txt->getFileSize();
 
   if (offset >= fileSize) {
@@ -197,6 +215,8 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
     return false;
   }
   buffer[chunkSize] = '\0';
+
+  uint32_t currentSourceLine = inLinesBeforeOffset ? *inLinesBeforeOffset : 0;
 
   // Parse lines from buffer
   size_t pos = 0;
@@ -235,6 +255,9 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
 
       if (lineWidth <= viewportWidth) {
         outLines.push_back(line);
+        if (outLineSentenceIndex) {
+          outLineSentenceIndex->push_back(static_cast<uint16_t>(std::min<uint32_t>(currentSourceLine, 65535u)));
+        }
         lineBytePos = displayLen;  // Consumed entire display content
         line.clear();
         break;
@@ -262,6 +285,9 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
       }
 
       outLines.push_back(line.substr(0, breakPos));
+      if (outLineSentenceIndex) {
+        outLineSentenceIndex->push_back(static_cast<uint16_t>(std::min<uint32_t>(currentSourceLine, 65535u)));
+      }
 
       // Skip space at break point
       size_t skipChars = breakPos;
@@ -276,6 +302,9 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
     if (line.empty()) {
       // Fully consumed this source line, move past the newline
       pos = lineEnd + 1;
+      if (inLinesBeforeOffset && lineEnd < chunkSize) {
+        currentSourceLine++;
+      }
     } else {
       // Partially consumed - page is full mid-line
       // Move pos to where we stopped in the line (NOT past the line)
@@ -295,6 +324,15 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
   // Make sure we don't go past the file
   if (nextOffset > fileSize) {
     nextOffset = fileSize;
+  }
+
+  if (outLinesBeforeNextOffset && inLinesBeforeOffset) {
+    *outLinesBeforeNextOffset = *inLinesBeforeOffset;
+    for (size_t i = 0; i < pos; ++i) {
+      if (buffer[i] == '\n') {
+        (*outLinesBeforeNextOffset)++;
+      }
+    }
   }
 
   free(buffer);
@@ -443,6 +481,7 @@ bool TxtReaderActivity::loadPageIndexCache() {
   // - uint8_t: paragraph alignment (to invalidate cache on alignment change)
   // - uint32_t: total pages count
   // - N * uint32_t: page offsets
+  // - N * uint32_t: source line index (newline-delimited lines, 0-based) at each page start
 
   std::string cachePath = txt->getCachePath() + "/index.bin";
   FsFile f;
@@ -521,6 +560,19 @@ bool TxtReaderActivity::loadPageIndexCache() {
     pageOffsets.push_back(offset);
   }
 
+  pageStartSourceLine.clear();
+  pageStartSourceLine.reserve(numPages);
+  for (uint32_t i = 0; i < numPages; i++) {
+    uint32_t lineStart;
+    serialization::readPod(f, lineStart);
+    pageStartSourceLine.push_back(lineStart);
+  }
+
+  if (pageStartSourceLine.size() != pageOffsets.size()) {
+    LOG_DBG("TRS", "Cache line-start table size mismatch, rebuilding");
+    return false;
+  }
+
   totalPages = pageOffsets.size();
   LOG_DBG("TRS", "Loaded page index cache: %d pages", totalPages);
   return true;
@@ -548,6 +600,10 @@ void TxtReaderActivity::savePageIndexCache() const {
   // Write page offsets
   for (size_t offset : pageOffsets) {
     serialization::writePod(f, static_cast<uint32_t>(offset));
+  }
+
+  for (uint32_t lineStart : pageStartSourceLine) {
+    serialization::writePod(f, lineStart);
   }
 
   LOG_DBG("TRS", "Saved page index cache: %d pages", totalPages);
