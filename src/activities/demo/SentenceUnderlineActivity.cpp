@@ -320,11 +320,6 @@ void SentenceUnderlineActivity::render(RenderLock&&) {
 
   renderStatusBar();
 
-  const char* backHint = sentenceAutoPaused ? tr(STR_BACK) : "Pause";
-  const char* confirmHint = sentenceAutoPaused ? "Play" : "Pause";
-  const auto labels = mappedInput.mapLabels(backHint, confirmHint, "Prev", "Next");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
   if (SETTINGS.textAntiAliasing) {
