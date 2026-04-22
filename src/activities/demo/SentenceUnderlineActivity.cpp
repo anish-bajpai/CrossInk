@@ -103,7 +103,7 @@ void SentenceUnderlineActivity::loop() {
     }
     sentenceAutoPaused = !sentenceAutoPaused;
     if (!sentenceAutoPaused) {
-      lastSentenceTime = std::chrono::steady_clock::now();
+      resetSentenceAdvanceClock();
     }
     requestUpdate();
     return;
@@ -119,28 +119,68 @@ void SentenceUnderlineActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(Btn::Left) || mappedInput.wasReleased(Btn::Down)) {
-    if (totalSourceLines > 0) {
+  const bool usePress = !SETTINGS.longPressChapterSkip;
+  const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
+                         mappedInput.wasReleased(Btn::Power);
+  const bool prevSideSentence = usePress ? mappedInput.wasPressed(Btn::Down) : mappedInput.wasReleased(Btn::Down);
+  const bool nextSideSentence = usePress ? mappedInput.wasPressed(Btn::Up) : mappedInput.wasReleased(Btn::Up);
+
+  if ((prevSideSentence || nextSideSentence) && totalSourceLines > 0) {
+    if (prevSideSentence) {
+      currentSentenceIndex = static_cast<uint16_t>(
+          (static_cast<uint32_t>(currentSentenceIndex) + totalSourceLines - 1u) % totalSourceLines);
+    } else {
+      currentSentenceIndex =
+          static_cast<uint16_t>((static_cast<uint32_t>(currentSentenceIndex) + 1u) % totalSourceLines);
+    }
+    if (sentencePageMapValid) {
+      applyPageForCurrentSentence();
+    }
+    resetSentenceAdvanceClock();
+    requestUpdate();
+    return;
+  }
+
+  if (sentenceAutoPaused) {
+    const bool prevPage = usePress ? mappedInput.wasPressed(Btn::Left) : mappedInput.wasReleased(Btn::Left);
+    const bool nextPage =
+        usePress ? (mappedInput.wasPressed(Btn::Right) || powerTurn) : (mappedInput.wasReleased(Btn::Right) || powerTurn);
+    if (prevPage && currentPage > 0) {
+      currentPage--;
+      syncSentenceIndexToCurrentPage();
+      requestUpdate();
+      return;
+    }
+    if (nextPage && totalPages > 0 && currentPage < totalPages - 1) {
+      currentPage++;
+      syncSentenceIndexToCurrentPage();
+      requestUpdate();
+      return;
+    }
+  } else {
+    const bool prevSentence = usePress ? mappedInput.wasPressed(Btn::Left) : mappedInput.wasReleased(Btn::Left);
+    const bool nextSentence =
+        usePress ? (mappedInput.wasPressed(Btn::Right) || powerTurn) : (mappedInput.wasReleased(Btn::Right) || powerTurn);
+    if (prevSentence && totalSourceLines > 0) {
       currentSentenceIndex = static_cast<uint16_t>(
           (static_cast<uint32_t>(currentSentenceIndex) + totalSourceLines - 1u) % totalSourceLines);
       if (sentencePageMapValid) {
         applyPageForCurrentSentence();
       }
+      resetSentenceAdvanceClock();
       requestUpdate();
+      return;
     }
-    return;
-  }
-
-  if (mappedInput.wasReleased(Btn::Right) || mappedInput.wasReleased(Btn::Up)) {
-    if (totalSourceLines > 0) {
+    if (nextSentence && totalSourceLines > 0) {
       currentSentenceIndex =
           static_cast<uint16_t>((static_cast<uint32_t>(currentSentenceIndex) + 1u) % totalSourceLines);
       if (sentencePageMapValid) {
         applyPageForCurrentSentence();
       }
+      resetSentenceAdvanceClock();
       requestUpdate();
+      return;
     }
-    return;
   }
 
   if (totalSourceLines == 0 || sentenceAutoPaused) {
@@ -150,7 +190,7 @@ void SentenceUnderlineActivity::loop() {
   const auto now = std::chrono::steady_clock::now();
   const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastSentenceTime).count();
   if (elapsed >= kSentenceIntervalMs) {
-    lastSentenceTime = now;
+    resetSentenceAdvanceClock();
     currentSentenceIndex =
         static_cast<uint16_t>((static_cast<uint32_t>(currentSentenceIndex) + 1u) % totalSourceLines);
     if (sentencePageMapValid) {
@@ -220,6 +260,7 @@ void SentenceUnderlineActivity::syncSentenceIndexToCurrentPage() {
   if (!loadPageAtOffset(offset, lines, nextOffset, &lineBase, &lineNext, &sidx) || sidx.empty()) {
     currentSentenceIndex =
         static_cast<uint16_t>(std::min<uint32_t>(lineBase, totalSourceLines > 0 ? totalSourceLines - 1u : 0u));
+    resetSentenceAdvanceClock();
     return;
   }
   uint16_t mn = sidx[0];
@@ -227,6 +268,11 @@ void SentenceUnderlineActivity::syncSentenceIndexToCurrentPage() {
     mn = std::min(mn, v);
   }
   currentSentenceIndex = mn;
+  resetSentenceAdvanceClock();
+}
+
+void SentenceUnderlineActivity::resetSentenceAdvanceClock() {
+  lastSentenceTime = std::chrono::steady_clock::now();
 }
 
 void SentenceUnderlineActivity::render(RenderLock&&) {

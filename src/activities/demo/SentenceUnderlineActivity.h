@@ -24,6 +24,7 @@ class SentenceUnderlineActivity final : public TxtReaderActivity {
   void rebuildSentenceFirstPageMap();
   void applyPageForCurrentSentence();
   void syncSentenceIndexToCurrentPage();
+  void resetSentenceAdvanceClock();
 
  public:
   explicit SentenceUnderlineActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
