@@ -1,13 +1,13 @@
 #include "SentenceUnderlineActivity.h"
 
-#include <EpdFontFamily.h>
 #include <FontCacheManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <Txt.h>
 
+#include <algorithm>
 #include <chrono>
-#include <cctype>
 #include <memory>
 
 #include "CrossPointSettings.h"
@@ -18,39 +18,21 @@
 
 namespace {
 
-constexpr const char* kDemoTxtPath = "/.crosspoint/SentenceDemo.txt";
+/// Same path as on SD card; simulator maps it to ./fs_/books/ (see scripts/ensure_sentence_demo_book.py).
+constexpr const char* kSentenceDemoBookPath = "/books/sentence_demo.txt";
+constexpr const char* kCrosspointCacheBase = "/.crosspoint";
 
-/// One logical line per newline. If the translation has no newlines, split after ". " / "? " / "! " so
-/// source-line indices advance (underline can cycle) without requiring every locale to use YAML blocks.
-std::string normalizeDemoBodyNewlines(std::string body) {
-  if (body.find('\n') != std::string::npos) {
-    return body;
-  }
-  for (size_t i = 0; i + 1 < body.size(); ++i) {
-    const unsigned char c = static_cast<unsigned char>(body[i]);
-    if ((c == '.' || c == '?' || c == '!') && body[i + 1] == ' ') {
-      body[i + 1] = '\n';
-    }
-  }
-  return body;
-}
-
-std::unique_ptr<Txt> createSentenceDemoTxt() {
-  if (!Storage.exists("/.crosspoint")) {
-    Storage.mkdir("/.crosspoint");
-  }
-  FsFile f;
-  if (!Storage.openFileForWrite("SND", kDemoTxtPath, f)) {
+std::unique_ptr<Txt> openSentenceDemoBook() {
+  if (!Storage.exists(kSentenceDemoBookPath)) {
+    LOG_ERR("SND",
+            "Missing %s — copy data/sentence_demo.txt from the repo to SD:/books/ (simulator: run a simulator "
+            "build so the pre-script populates ./fs_/books/).",
+            kSentenceDemoBookPath);
     return nullptr;
   }
-  const std::string body = normalizeDemoBodyNewlines(tr(STR_SENTENCE_DEMO_BODY));
-  if (!body.empty()) {
-    f.write(body.data(), body.size());
-  }
-  f.close();
-
-  auto txt = std::unique_ptr<Txt>(new Txt(kDemoTxtPath, "/.crosspoint"));
+  auto txt = std::unique_ptr<Txt>(new Txt(kSentenceDemoBookPath, kCrosspointCacheBase));
   if (!txt->load()) {
+    LOG_ERR("SND", "Failed to open %s", kSentenceDemoBookPath);
     return nullptr;
   }
   return txt;
@@ -82,7 +64,7 @@ uint32_t countSourceLines(const Txt& t) {
 }  // namespace
 
 SentenceUnderlineActivity::SentenceUnderlineActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : TxtReaderActivity(renderer, mappedInput, createSentenceDemoTxt(), "SentenceUnderline") {}
+    : TxtReaderActivity(renderer, mappedInput, openSentenceDemoBook(), "SentenceUnderline") {}
 
 void SentenceUnderlineActivity::onEnter() {
   Activity::onEnter();
@@ -100,6 +82,8 @@ void SentenceUnderlineActivity::onEnter() {
   lastSentenceTime = std::chrono::steady_clock::now();
   currentSentenceIndex = 0;
   initialized = false;
+  sentencePageMapValid = false;
+  firstPageForSourceLine.clear();
   pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   requestUpdate();
 }
@@ -118,11 +102,13 @@ void SentenceUnderlineActivity::loop() {
   auto [prevTriggered, nextTriggered] = ReaderUtils::detectPageTurn(mappedInput);
   if (prevTriggered && currentPage > 0) {
     currentPage--;
+    syncSentenceIndexToCurrentPage();
     requestUpdate();
     return;
   }
   if (nextTriggered && currentPage < totalPages - 1) {
     currentPage++;
+    syncSentenceIndexToCurrentPage();
     requestUpdate();
     return;
   }
@@ -137,87 +123,80 @@ void SentenceUnderlineActivity::loop() {
     lastSentenceTime = now;
     currentSentenceIndex =
         static_cast<uint16_t>((static_cast<uint32_t>(currentSentenceIndex) + 1u) % totalSourceLines);
+    if (sentencePageMapValid) {
+      applyPageForCurrentSentence();
+    }
     requestUpdate();
   }
 }
 
-void SentenceUnderlineActivity::rebuildLaidWords() {
-  laidWords.clear();
-  if (currentPageLines.empty() || sentenceIndexPerLine.size() != currentPageLines.size()) {
+void SentenceUnderlineActivity::rebuildSentenceFirstPageMap() {
+  firstPageForSourceLine.clear();
+  if (!initialized || totalSourceLines == 0 || totalPages <= 0 || pageOffsets.empty()) {
     return;
   }
+  firstPageForSourceLine.assign(static_cast<size_t>(totalSourceLines), -1);
 
-  const int lineHeight = renderer.getLineHeight(cachedFontId);
-  const int contentWidth = viewportWidth;
-  const int bottomLimit = renderer.getScreenHeight() - cachedOrientedMarginBottom;
-  int y = cachedOrientedMarginTop;
-
-  for (size_t idx = 0; idx < currentPageLines.size(); ++idx) {
-    const std::string& line = currentPageLines[idx];
-    const uint16_t sidx = sentenceIndexPerLine[idx];
-
-    if (y + lineHeight > bottomLimit) {
-      break;
-    }
-
-    if (line.empty()) {
-      y += lineHeight;
+  for (int p = 0; p < totalPages; ++p) {
+    const size_t offset = pageOffsets[static_cast<size_t>(p)];
+    size_t nextOffset = 0;
+    uint32_t lineBase =
+        (!pageStartSourceLine.empty() && static_cast<size_t>(p) < pageStartSourceLine.size())
+            ? pageStartSourceLine[static_cast<size_t>(p)]
+            : 0;
+    uint32_t lineNext = lineBase;
+    std::vector<std::string> lines;
+    std::vector<uint16_t> sidx;
+    if (!loadPageAtOffset(offset, lines, nextOffset, &lineBase, &lineNext, &sidx)) {
       continue;
     }
-
-    int x = cachedOrientedMarginLeft;
-    switch (cachedParagraphAlignment) {
-      case CrossPointSettings::CENTER_ALIGN: {
-        const int textWidth = renderer.getTextWidth(cachedFontId, line.c_str());
-        x = cachedOrientedMarginLeft + (contentWidth - textWidth) / 2;
-        break;
+    for (uint16_t v : sidx) {
+      const size_t si = static_cast<size_t>(v);
+      if (si < firstPageForSourceLine.size() && firstPageForSourceLine[si] < 0) {
+        firstPageForSourceLine[si] = p;
       }
-      case CrossPointSettings::RIGHT_ALIGN: {
-        const int textWidth = renderer.getTextWidth(cachedFontId, line.c_str());
-        x = cachedOrientedMarginLeft + contentWidth - textWidth;
-        break;
-      }
-      case CrossPointSettings::LEFT_ALIGN:
-      case CrossPointSettings::JUSTIFIED:
-      default:
-        break;
     }
-
-    size_t j = 0;
-    while (j < line.size()) {
-      while (j < line.size() && std::isspace(static_cast<unsigned char>(line[j]))) {
-        j++;
-      }
-      if (j >= line.size()) {
-        break;
-      }
-      size_t k = j;
-      while (k < line.size() && !std::isspace(static_cast<unsigned char>(line[k]))) {
-        k++;
-      }
-      const std::string word = line.substr(j, k - j);
-      const int wordW = renderer.getTextWidth(cachedFontId, word.c_str());
-      const int spaceW = renderer.getSpaceWidth(cachedFontId, EpdFontFamily::REGULAR);
-      int advance = wordW;
-      if (x > cachedOrientedMarginLeft) {
-        advance += spaceW;
-      }
-      if (x > cachedOrientedMarginLeft && x + advance > cachedOrientedMarginLeft + contentWidth) {
-        x = cachedOrientedMarginLeft;
-        y += lineHeight;
-        if (y + lineHeight > bottomLimit) {
-          return;
-        }
-      }
-      if (x > cachedOrientedMarginLeft) {
-        x += spaceW;
-      }
-      laidWords.push_back(LaidWord{word, x, y, sidx});
-      x += wordW;
-      j = k;
-    }
-    y += lineHeight;
   }
+}
+
+void SentenceUnderlineActivity::applyPageForCurrentSentence() {
+  if (firstPageForSourceLine.empty()) {
+    return;
+  }
+  const size_t si = static_cast<size_t>(currentSentenceIndex);
+  if (si >= firstPageForSourceLine.size()) {
+    return;
+  }
+  const int fp = firstPageForSourceLine[si];
+  if (fp >= 0 && fp < totalPages) {
+    currentPage = fp;
+  }
+}
+
+void SentenceUnderlineActivity::syncSentenceIndexToCurrentPage() {
+  if (!initialized || !txt || pageOffsets.empty() || totalSourceLines == 0) {
+    return;
+  }
+  const int p = std::clamp(currentPage, 0, std::max(0, totalPages - 1));
+  const size_t offset = pageOffsets[static_cast<size_t>(p)];
+  size_t nextOffset = 0;
+  uint32_t lineBase =
+      (!pageStartSourceLine.empty() && static_cast<size_t>(p) < pageStartSourceLine.size())
+          ? pageStartSourceLine[static_cast<size_t>(p)]
+          : 0;
+  uint32_t lineNext = lineBase;
+  std::vector<std::string> lines;
+  std::vector<uint16_t> sidx;
+  if (!loadPageAtOffset(offset, lines, nextOffset, &lineBase, &lineNext, &sidx) || sidx.empty()) {
+    currentSentenceIndex =
+        static_cast<uint16_t>(std::min<uint32_t>(lineBase, totalSourceLines > 0 ? totalSourceLines - 1u : 0u));
+    return;
+  }
+  uint16_t mn = sidx[0];
+  for (uint16_t v : sidx) {
+    mn = std::min(mn, v);
+  }
+  currentSentenceIndex = mn;
 }
 
 void SentenceUnderlineActivity::render(RenderLock&&) {
@@ -243,6 +222,12 @@ void SentenceUnderlineActivity::render(RenderLock&&) {
     currentPage = totalPages - 1;
   }
 
+  if (!sentencePageMapValid && totalPages > 0 && totalSourceLines > 0) {
+    rebuildSentenceFirstPageMap();
+    sentencePageMapValid = true;
+    applyPageForCurrentSentence();
+  }
+
   const size_t offset = pageOffsets[static_cast<size_t>(currentPage)];
   size_t nextOffset = 0;
   uint32_t lineBase =
@@ -254,24 +239,46 @@ void SentenceUnderlineActivity::render(RenderLock&&) {
   sentenceIndexPerLine.clear();
   currentPageLines.clear();
   loadPageAtOffset(offset, currentPageLines, nextOffset, &lineBase, &lineNext, &sentenceIndexPerLine);
-  rebuildLaidWords();
 
   renderer.clearScreen();
 
   auto* fcm = renderer.getFontCacheManager();
   fcm->resetStats();
 
+  const int lineHeight = renderer.getLineHeight(cachedFontId);
+  const int contentWidth = viewportWidth;
+
+  // Match TxtReaderActivity::renderPage: one drawText per wrapped row (no second word-wrap pass).
   auto drawContent = [&]() {
-    for (const auto& w : laidWords) {
-      renderer.drawText(cachedFontId, w.x, w.y, w.text.c_str(), true, EpdFontFamily::REGULAR);
-    }
-    for (const auto& w : laidWords) {
-      if (w.sentenceIdx != currentSentenceIndex) {
-        continue;
+    int y = cachedOrientedMarginTop;
+    for (size_t i = 0; i < currentPageLines.size(); ++i) {
+      const std::string& line = currentPageLines[i];
+      if (!line.empty()) {
+        int x = cachedOrientedMarginLeft;
+        switch (cachedParagraphAlignment) {
+          case CrossPointSettings::CENTER_ALIGN: {
+            const int textWidth = renderer.getTextWidth(cachedFontId, line.c_str());
+            x = cachedOrientedMarginLeft + (contentWidth - textWidth) / 2;
+            break;
+          }
+          case CrossPointSettings::RIGHT_ALIGN: {
+            const int textWidth = renderer.getTextWidth(cachedFontId, line.c_str());
+            x = cachedOrientedMarginLeft + contentWidth - textWidth;
+            break;
+          }
+          case CrossPointSettings::LEFT_ALIGN:
+          case CrossPointSettings::JUSTIFIED:
+          default:
+            break;
+        }
+        renderer.drawText(cachedFontId, x, y, line.c_str());
+        if (i < sentenceIndexPerLine.size() && sentenceIndexPerLine[i] == currentSentenceIndex) {
+          const int textWidth = renderer.getTextWidth(cachedFontId, line.c_str());
+          const int underlineY = y + renderer.getFontAscenderSize(cachedFontId) + 2;
+          renderer.drawLine(x, underlineY, x + textWidth, underlineY, 3, true);
+        }
       }
-      const int fullWordWidth = renderer.getTextWidth(cachedFontId, w.text.c_str(), EpdFontFamily::REGULAR);
-      const int underlineY = w.y + renderer.getFontAscenderSize(cachedFontId) + 2;
-      renderer.drawLine(w.x, underlineY, w.x + fullWordWidth, underlineY, 3, true);
+      y += lineHeight;
     }
   };
 

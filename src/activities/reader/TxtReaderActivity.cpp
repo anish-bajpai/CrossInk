@@ -231,11 +231,6 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
     // Check if we have a complete line
     bool lineComplete = (lineEnd < chunkSize) || (offset + lineEnd >= fileSize);
 
-    if (!lineComplete && static_cast<int>(outLines.size()) > 0) {
-      // Incomplete line and we already have some lines, stop here
-      break;
-    }
-
     // Calculate the actual length of line content in the buffer (excluding newline)
     size_t lineContentLen = lineEnd - pos;
 

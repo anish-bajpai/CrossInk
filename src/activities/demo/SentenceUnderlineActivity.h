@@ -8,22 +8,20 @@
 #include "../reader/TxtReaderActivity.h"
 
 class SentenceUnderlineActivity final : public TxtReaderActivity {
-  struct LaidWord {
-    std::string text;
-    int x = 0;
-    int y = 0;
-    uint16_t sentenceIdx = 0;
-  };
-
-  std::vector<LaidWord> laidWords;
   std::vector<uint16_t> sentenceIndexPerLine;
   uint32_t totalSourceLines = 0;
   uint16_t currentSentenceIndex = 0;
   std::chrono::steady_clock::time_point lastSentenceTime{};
 
+  /// firstPageForSourceLine[s] = first page index that shows a wrapped row for source line s, or -1 if none.
+  std::vector<int> firstPageForSourceLine;
+  bool sentencePageMapValid = false;
+
   static constexpr int kSentenceIntervalMs = 2500;
 
-  void rebuildLaidWords();
+  void rebuildSentenceFirstPageMap();
+  void applyPageForCurrentSentence();
+  void syncSentenceIndexToCurrentPage();
 
  public:
   explicit SentenceUnderlineActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);

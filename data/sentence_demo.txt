@@ -1,0 +1,50 @@
+This sample is long on purpose so paging shows more than one screen.
+Each line here is treated as one sentence row for the underline demo.
+Turn pages with the usual controls to jump along the stored text file.
+The timer should advance the highlight and move you to the right page.
+Short lines keep wrapping predictable on simulator and on hardware.
+Line six asks whether the underline and page feel linked as you read.
+Line seven is filler about calm reading speed and steady eye movement.
+Line eight notes that e-ink refreshes cost more than LCD updates do.
+Line nine suggests skimming headings before committing to full text.
+Line ten reminds that fonts, margins, and line spacing change layout.
+Line eleven claims nothing here is prose from a published novel.
+Line twelve is about bookmarks, footnotes, and other reader chrome.
+Line thirteen imagines a commuter train and a paperback in the rain.
+Line fourteen prefers serif fonts for long fiction on matte screens.
+Line fifteen prefers sans fonts for UI labels and short status lines.
+Line sixteen repeats that one newline equals one logical source line.
+Line seventeen is padding so the page index must split across pages.
+Line eighteen continues padding with neutral technical vocabulary.
+Line nineteen mentions pagination, offsets, and chunked file reads.
+Line twenty is still padding but slightly different words each time.
+Line twenty-one watches the status bar creep upward page by page.
+Line twenty-two hums quietly about cache files and progress blobs.
+Line twenty-three avoids emoji so the no_emoji build stays honest.
+Line twenty-four walks past a shelf of identical gray developer kits.
+Line twenty-five counts pixels in multiples of eight for alignment.
+Line twenty-six thinks about anti-aliasing passes and waveform LUTs.
+Line twenty-seven prefers consistent spacing over clever line breaks.
+Line twenty-eight would like a cup of tea before the next refactor.
+Line twenty-nine wonders if anyone reads demo strings end to end.
+Line thirty asserts that boredom is a valid test signal sometimes.
+Line thirty-one rolls onward like a slow conveyor belt of clauses.
+Line thirty-two mentions OPDS, Wi-Fi, and other unrelated subsystems.
+Line thirty-three is almost halfway through this deliberate sprawl.
+Line thirty-four nods to hyphenation, kerning, and letter spacing.
+Line thirty-five keeps characters mostly in ASCII for portability.
+Line thirty-six imagines footnotes dancing at the bottom of a page.
+Line thirty-seven is impatient to reach the second physical page.
+Line thirty-eight checks that sentence indices stay stable on wrap.
+Line thirty-nine praises simple state machines over nested callbacks.
+Line forty crosses into territory that should paginate by now.
+Line forty-one refuses to end the joke even as the margin narrows.
+Line forty-two lists batteries, buses, and SPI clocks for no reason.
+Line forty-three is grateful the firmware still fits in flash today.
+Line forty-four watches stack watermarks and heap fragmentation fears.
+Line forty-five suggests profiling before blaming the garbage policy.
+Line forty-six almost concludes but saves one beat for suspense.
+Line forty-seven blinks the cursor once for every skipped unit test.
+Line forty-eight promises the next line will sound slightly final.
+Line forty-nine thanks you for scrolling this far through gray copy.
+Line fifty closes the loop so underline and page turn stay in sync.
