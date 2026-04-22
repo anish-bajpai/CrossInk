@@ -81,6 +81,7 @@ void SentenceUnderlineActivity::onEnter() {
 
   lastSentenceTime = std::chrono::steady_clock::now();
   currentSentenceIndex = 0;
+  sentenceAutoPaused = false;
   initialized = false;
   sentencePageMapValid = false;
   firstPageForSourceLine.clear();
@@ -93,27 +94,56 @@ void SentenceUnderlineActivity::onExit() {
 }
 
 void SentenceUnderlineActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    finish();
-    return;
-  }
+  using Btn = MappedInputManager::Button;
 
-  auto [prevTriggered, nextTriggered] = ReaderUtils::detectPageTurn(mappedInput);
-  if (prevTriggered && currentPage > 0) {
-    currentPage--;
-    syncSentenceIndexToCurrentPage();
-    requestUpdate();
-    return;
-  }
-  if (nextTriggered && currentPage < totalPages - 1) {
-    currentPage++;
-    syncSentenceIndexToCurrentPage();
+  if (mappedInput.wasReleased(Btn::Confirm)) {
+    if (mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
+      finish();
+      return;
+    }
+    sentenceAutoPaused = !sentenceAutoPaused;
+    if (!sentenceAutoPaused) {
+      lastSentenceTime = std::chrono::steady_clock::now();
+    }
     requestUpdate();
     return;
   }
 
-  if (totalSourceLines == 0) {
+  if (mappedInput.wasReleased(Btn::Back)) {
+    if (!sentenceAutoPaused) {
+      sentenceAutoPaused = true;
+      requestUpdate();
+    } else {
+      finish();
+    }
+    return;
+  }
+
+  if (mappedInput.wasReleased(Btn::Left) || mappedInput.wasReleased(Btn::Down)) {
+    if (totalSourceLines > 0) {
+      currentSentenceIndex = static_cast<uint16_t>(
+          (static_cast<uint32_t>(currentSentenceIndex) + totalSourceLines - 1u) % totalSourceLines);
+      if (sentencePageMapValid) {
+        applyPageForCurrentSentence();
+      }
+      requestUpdate();
+    }
+    return;
+  }
+
+  if (mappedInput.wasReleased(Btn::Right) || mappedInput.wasReleased(Btn::Up)) {
+    if (totalSourceLines > 0) {
+      currentSentenceIndex =
+          static_cast<uint16_t>((static_cast<uint32_t>(currentSentenceIndex) + 1u) % totalSourceLines);
+      if (sentencePageMapValid) {
+        applyPageForCurrentSentence();
+      }
+      requestUpdate();
+    }
+    return;
+  }
+
+  if (totalSourceLines == 0 || sentenceAutoPaused) {
     return;
   }
 
@@ -290,7 +320,9 @@ void SentenceUnderlineActivity::render(RenderLock&&) {
 
   renderStatusBar();
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+  const char* backHint = sentenceAutoPaused ? tr(STR_BACK) : "Pause";
+  const char* confirmHint = sentenceAutoPaused ? "Play" : "Pause";
+  const auto labels = mappedInput.mapLabels(backHint, confirmHint, "Prev", "Next");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);

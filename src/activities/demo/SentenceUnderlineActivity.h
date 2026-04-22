@@ -16,6 +16,8 @@ class SentenceUnderlineActivity final : public TxtReaderActivity {
   /// firstPageForSourceLine[s] = first page index that shows a wrapped row for source line s, or -1 if none.
   std::vector<int> firstPageForSourceLine;
   bool sentencePageMapValid = false;
+  /// When true, auto-advance timer is stopped; Back then exits (finish).
+  bool sentenceAutoPaused = false;
 
   static constexpr int kSentenceIntervalMs = 2500;
 
